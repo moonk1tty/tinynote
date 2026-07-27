@@ -1,0 +1,6 @@
+{
+  "name": "tinynote",
+  "description": "A Telegram Mini App for daily gratitude tracking with a monthly calendar grid, color vibes, and 9:16 Story Card canvas export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
