@@ -41,7 +41,7 @@ export default function App() {
     return currentDate.getDate();
   }, [currentDate]);
 
-  // Load initial data from API & Telegram SDK
+  // Load initial data from API & Telegram SDK with localStorage fallback & auto-sync
   useEffect(() => {
     initTelegramWebApp();
     const user = getTelegramUser();
@@ -49,18 +49,78 @@ export default function App() {
       setTelegramUser(user);
     }
 
-    // Load data from server API
-    fetch('/api/entries')
+    const currentUserId = user ? `tg_${user.id}` : (localStorage.getItem('tinynote_client_id') || (() => {
+      const id = 'web_' + Math.random().toString(36).substring(2, 11);
+      localStorage.setItem('tinynote_client_id', id);
+      return id;
+    })());
+
+    // 1. Load local cache immediately for instant render
+    let cachedEntries: Record<number, GratitudeEntry> = {};
+    try {
+      const saved = localStorage.getItem(`${STORAGE_KEY}_${currentUserId}`);
+      if (saved) {
+        cachedEntries = JSON.parse(saved);
+        if (typeof cachedEntries === 'object' && cachedEntries !== null) {
+          setEntries(cachedEntries);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to parse local storage cache:', err);
+    }
+
+    // 2. Fetch from server API
+    fetch('/api/entries', {
+      headers: { 'X-User-Id': currentUserId }
+    })
       .then((res) => res.json())
       .then((data) => {
         if (data.success && data.entries) {
-          setEntries(data.entries);
+          const apiEntries = data.entries;
+          const apiCount = Object.keys(apiEntries).length;
+          const cacheCount = Object.keys(cachedEntries).length;
+
+          if (apiCount > 0) {
+            setEntries(apiEntries);
+            localStorage.setItem(`${STORAGE_KEY}_${currentUserId}`, JSON.stringify(apiEntries));
+          } else if (cacheCount > 0) {
+            // Server file was reset or fresh boot: sync cached entries back to server
+            fetch('/api/entries/demo', {
+              method: 'POST',
+              headers: { 
+                'Content-Type': 'application/json',
+                'X-User-Id': currentUserId
+              },
+              body: JSON.stringify({ entries: cachedEntries, userId: currentUserId }),
+            })
+              .then((r) => r.json())
+              .then((syncData) => {
+                if (syncData.success && syncData.entries) {
+                  setEntries(syncData.entries);
+                }
+              })
+              .catch((err) => console.error('Failed to sync cache to server:', err));
+          }
         }
       })
       .catch((err) => {
         console.error('Failed to fetch entries from API:', err);
       });
   }, []);
+
+  const getCurrentUserId = () => {
+    if (telegramUser?.id) return `tg_${telegramUser.id}`;
+    return localStorage.getItem('tinynote_client_id') || 'guest_user';
+  };
+
+  const saveToLocalCache = (updated: Record<number, GratitudeEntry>) => {
+    try {
+      const uid = getCurrentUserId();
+      localStorage.setItem(`${STORAGE_KEY}_${uid}`, JSON.stringify(updated));
+    } catch (err) {
+      console.error('Failed to save to localStorage:', err);
+    }
+  };
 
   // Calculate streak up to today
   const streakDays = useMemo(() => {
@@ -99,16 +159,22 @@ export default function App() {
     // Optimistic UI update
     const updated = { ...entries, [dayNumber]: newEntry };
     setEntries(updated);
+    saveToLocalCache(updated);
 
+    const uid = getCurrentUserId();
     try {
       const res = await fetch('/api/entries', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dayNumber, text, gradientId, dateString })
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-User-Id': uid
+        },
+        body: JSON.stringify({ dayNumber, text, gradientId, dateString, userId: uid })
       });
       const data = await res.json();
       if (data.success && data.entries) {
         setEntries(data.entries);
+        saveToLocalCache(data.entries);
       }
     } catch (err) {
       console.error('Failed to save entry to API:', err);
@@ -120,14 +186,18 @@ export default function App() {
     const updated = { ...entries };
     delete updated[dayNumber];
     setEntries(updated);
+    saveToLocalCache(updated);
 
+    const uid = getCurrentUserId();
     try {
       const res = await fetch(`/api/entries/${dayNumber}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: { 'X-User-Id': uid }
       });
       const data = await res.json();
       if (data.success && data.entries) {
         setEntries(data.entries);
+        saveToLocalCache(data.entries);
       }
     } catch (err) {
       console.error('Failed to delete entry via API:', err);
@@ -191,11 +261,15 @@ export default function App() {
 
     setEntries(filteredSamples);
 
+    const uid = getCurrentUserId();
     try {
       const res = await fetch('/api/entries/demo', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entries: filteredSamples })
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-User-Id': uid
+        },
+        body: JSON.stringify({ entries: filteredSamples, userId: uid })
       });
       const data = await res.json();
       if (data.success && data.entries) {
@@ -211,8 +285,12 @@ export default function App() {
       triggerHaptic('warning');
       setEntries({});
 
+      const uid = getCurrentUserId();
       try {
-        await fetch('/api/entries/reset', { method: 'POST' });
+        await fetch('/api/entries/reset', { 
+          method: 'POST',
+          headers: { 'X-User-Id': uid }
+        });
       } catch (err) {
         console.error('Failed to reset entries via API:', err);
       }
