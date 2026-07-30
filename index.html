@@ -27,6 +27,31 @@
   <body class="bg-[#f8f7f4] text-[#1a1a1a] antialiased selection:bg-[#6366f1] selection:text-white min-h-screen">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+
+      <script>
+          // Paste your JavaScript code inside this <script> tag:
+      
+          async function saveEntryFromMiniApp(category, noteText) {
+            const userId = tg.initDataUnsafe?.user?.id || "DEBUG_USER_123";
+            const firstName = tg.initDataUnsafe?.user?.first_name || "Friend";
+      
+            // Replace with your Google Apps Script Web App URL
+            const SCRIPT_URL = "https://script.google.com/macros/s/YOUR_EXEC_ID/exec";
+      
+            const saveUrl = `${SCRIPT_URL}?action=addEntry&userId=${userId}&firstName=${encodeURIComponent(firstName)}&category=${encodeURIComponent(category)}&note=${encodeURIComponent(noteText)}`;
+      
+            try {
+              const response = await fetch(saveUrl, { redirect: "follow" });
+              const result = await response.json();
+              if (result.success) {
+                alert("Entry saved to Google Sheets!");
+              }
+            } catch (err) {
+              console.error("Error saving entry:", err);
+            }
+          }
+        </script>
+    
   </body>
 </html>
 
