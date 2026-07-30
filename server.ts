@@ -8,53 +8,99 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// Server-side storage configuration
-const DATA_DIR = path.join(process.cwd(), "data");
-const DATA_FILE = path.join(DATA_DIR, "entries.json");
+// Enable CORS for Google Sheets / external tools
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(200);
+    return;
+  }
+  next();
+});
+
+// Server-side storage configuration (using /tmp to avoid triggering tsx watcher restarts)
+const DATA_FILE = path.join("/tmp", "tinynote_entries.json");
 
 function ensureDataFile() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
   if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify({}), "utf-8");
+    fs.writeFileSync(DATA_FILE, JSON.stringify({ users: {} }), "utf-8");
   }
 }
 
-function readEntries(): Record<number, any> {
+function readAllUsersData(): Record<string, Record<number, any>> {
   try {
     ensureDataFile();
     const raw = fs.readFileSync(DATA_FILE, "utf-8");
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && parsed.users) {
+      return parsed.users;
+    }
+    // Migration fallback for legacy non-user-scoped json
+    return { guest_user: parsed || {} };
   } catch (err) {
     console.error("Error reading entries data file:", err);
     return {};
   }
 }
 
-function writeEntries(entries: Record<number, any>) {
+function getUserIdFromReq(req: express.Request): string {
+  const headerId = req.headers["x-user-id"] || req.headers["x-telegram-user-id"];
+  if (headerId && typeof headerId === "string" && headerId.trim()) {
+    return headerId.trim();
+  }
+  const queryId = req.query.userId || req.query.user_id;
+  if (queryId && typeof queryId === "string" && queryId.trim()) {
+    return queryId.trim();
+  }
+  if (req.body && (req.body.userId || req.body.user_id)) {
+    const bodyId = String(req.body.userId || req.body.user_id).trim();
+    if (bodyId) return bodyId;
+  }
+  return "guest_user";
+}
+
+function readUserEntries(userId: string): Record<number, any> {
+  const allData = readAllUsersData();
+  return allData[userId] || {};
+}
+
+function writeUserEntries(userId: string, entries: Record<number, any>) {
   try {
     ensureDataFile();
-    fs.writeFileSync(DATA_FILE, JSON.stringify(entries, null, 2), "utf-8");
+    const allData = readAllUsersData();
+    allData[userId] = entries;
+    fs.writeFileSync(DATA_FILE, JSON.stringify({ users: allData }, null, 2), "utf-8");
   } catch (err) {
     console.error("Error writing entries data file:", err);
   }
 }
 
 // REST API Endpoints
-app.get("/api/entries", (_req, res) => {
-  const entries = readEntries();
-  res.json({ success: true, entries });
+app.get("/api/entries", (req, res) => {
+  const userId = getUserIdFromReq(req);
+  const entries = readUserEntries(userId);
+  res.json({ success: true, userId, count: Object.keys(entries).length, entries });
+});
+
+// Endpoint for formatted array suitable for Google Sheets / CSV
+app.get("/api/entries/list", (req, res) => {
+  const userId = getUserIdFromReq(req);
+  const entries = readUserEntries(userId);
+  const list = Object.values(entries).sort((a, b) => a.dayNumber - b.dayNumber);
+  res.json(list);
 });
 
 app.post("/api/entries", (req, res) => {
+  const userId = getUserIdFromReq(req);
   const { dayNumber, text, gradientId, dateString } = req.body;
   if (typeof dayNumber !== "number") {
     res.status(400).json({ success: false, error: "Invalid day number" });
     return;
   }
 
-  const entries = readEntries();
+  const entries = readUserEntries(userId);
   const newEntry = {
     id: `day-${dayNumber}`,
     dayNumber,
@@ -65,32 +111,35 @@ app.post("/api/entries", (req, res) => {
   };
 
   entries[dayNumber] = newEntry;
-  writeEntries(entries);
-  res.json({ success: true, entry: newEntry, entries });
+  writeUserEntries(userId, entries);
+  res.json({ success: true, userId, entry: newEntry, entries });
 });
 
 app.delete("/api/entries/:dayNumber", (req, res) => {
+  const userId = getUserIdFromReq(req);
   const dayNumber = parseInt(req.params.dayNumber, 10);
   if (isNaN(dayNumber)) {
     res.status(400).json({ success: false, error: "Invalid day number" });
     return;
   }
 
-  const entries = readEntries();
+  const entries = readUserEntries(userId);
   delete entries[dayNumber];
-  writeEntries(entries);
-  res.json({ success: true, entries });
+  writeUserEntries(userId, entries);
+  res.json({ success: true, userId, entries });
 });
 
-app.post("/api/entries/reset", (_req, res) => {
-  writeEntries({});
-  res.json({ success: true, entries: {} });
+app.post("/api/entries/reset", (req, res) => {
+  const userId = getUserIdFromReq(req);
+  writeUserEntries(userId, {});
+  res.json({ success: true, userId, entries: {} });
 });
 
 app.post("/api/entries/demo", (req, res) => {
+  const userId = getUserIdFromReq(req);
   const { entries: demoEntries } = req.body;
-  writeEntries(demoEntries || {});
-  res.json({ success: true, entries: demoEntries || {} });
+  writeUserEntries(userId, demoEntries || {});
+  res.json({ success: true, userId, entries: demoEntries || {} });
 });
 
 async function startServer() {
