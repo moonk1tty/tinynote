@@ -46,19 +46,25 @@ function readAllUsersData(): Record<string, Record<number, any>> {
 }
 
 function getUserIdFromReq(req: express.Request): string {
+  let rawId = "";
   const headerId = req.headers["x-user-id"] || req.headers["x-telegram-user-id"];
   if (headerId && typeof headerId === "string" && headerId.trim()) {
-    return headerId.trim();
+    rawId = headerId.trim();
+  } else {
+    const queryId = req.query.userId || req.query.user_id;
+    if (queryId && typeof queryId === "string" && queryId.trim()) {
+      rawId = queryId.trim();
+    } else if (req.body && (req.body.userId || req.body.user_id)) {
+      rawId = String(req.body.userId || req.body.user_id).trim();
+    }
   }
-  const queryId = req.query.userId || req.query.user_id;
-  if (queryId && typeof queryId === "string" && queryId.trim()) {
-    return queryId.trim();
+
+  if (!rawId) return "guest_user";
+  // Normalize numeric Telegram user IDs (e.g. 8839781890) to tg_8839781890
+  if (/^\d+$/.test(rawId)) {
+    return `tg_${rawId}`;
   }
-  if (req.body && (req.body.userId || req.body.user_id)) {
-    const bodyId = String(req.body.userId || req.body.user_id).trim();
-    if (bodyId) return bodyId;
-  }
-  return "guest_user";
+  return rawId;
 }
 
 function readUserEntries(userId: string): Record<number, any> {
