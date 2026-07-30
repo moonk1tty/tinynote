@@ -41,7 +41,7 @@ export default function App() {
     return currentDate.getDate();
   }, [currentDate]);
 
-  // Load initial data & Telegram SDK
+  // Load initial data from API & Telegram SDK
   useEffect(() => {
     initTelegramWebApp();
     const user = getTelegramUser();
@@ -49,28 +49,18 @@ export default function App() {
       setTelegramUser(user);
     }
 
-    // Load local storage data
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (typeof parsed === 'object' && parsed !== null) {
-          setEntries(parsed);
+    // Load data from server API
+    fetch('/api/entries')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.entries) {
+          setEntries(data.entries);
         }
-      }
-    } catch (err) {
-      console.error('Failed to parse saved entries:', err);
-    }
+      })
+      .catch((err) => {
+        console.error('Failed to fetch entries from API:', err);
+      });
   }, []);
-
-  // Save to localStorage whenever entries change
-  const saveToStorage = (updatedEntries: Record<number, GratitudeEntry>) => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedEntries));
-    } catch (err) {
-      console.error('Failed to save to localStorage:', err);
-    }
-  };
 
   // Calculate streak up to today
   const streakDays = useMemo(() => {
@@ -95,26 +85,53 @@ export default function App() {
     setIsEntryModalOpen(true);
   };
 
-  const handleSaveEntry = (dayNumber: number, text: string, gradientId: GradientId) => {
+  const handleSaveEntry = async (dayNumber: number, text: string, gradientId: GradientId) => {
+    const dateString = `${monthName} ${dayNumber}, ${year}`;
     const newEntry: GratitudeEntry = {
       id: `day-${dayNumber}`,
       dayNumber,
       text,
       gradientId,
       createdAt: Date.now(),
-      dateString: `${monthName} ${dayNumber}, ${year}`
+      dateString
     };
 
+    // Optimistic UI update
     const updated = { ...entries, [dayNumber]: newEntry };
     setEntries(updated);
-    saveToStorage(updated);
+
+    try {
+      const res = await fetch('/api/entries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dayNumber, text, gradientId, dateString })
+      });
+      const data = await res.json();
+      if (data.success && data.entries) {
+        setEntries(data.entries);
+      }
+    } catch (err) {
+      console.error('Failed to save entry to API:', err);
+    }
   };
 
-  const handleDeleteEntry = (dayNumber: number) => {
+  const handleDeleteEntry = async (dayNumber: number) => {
+    // Optimistic UI update
     const updated = { ...entries };
     delete updated[dayNumber];
     setEntries(updated);
-    saveToStorage(updated);
+
+    try {
+      const res = await fetch(`/api/entries/${dayNumber}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (data.success && data.entries) {
+        setEntries(data.entries);
+      }
+    } catch (err) {
+      console.error('Failed to delete entry via API:', err);
+    }
   };
 
   const handleGenerateStoryCard = async () => {
@@ -140,7 +157,7 @@ export default function App() {
   };
 
   // Populate Demo Month Grid for past & today dates only
-  const handleLoadSampleData = () => {
+  const handleLoadSampleData = async () => {
     triggerHaptic('success');
     const allPossibleSamples: Record<number, GratitudeEntry> = {
       1: { id: 'day-1', dayNumber: 1, text: 'A calm morning espresso with quiet golden sunlight.', gradientId: 'sunset', createdAt: Date.now() },
@@ -173,14 +190,32 @@ export default function App() {
     });
 
     setEntries(filteredSamples);
-    saveToStorage(filteredSamples);
+
+    try {
+      const res = await fetch('/api/entries/demo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: filteredSamples })
+      });
+      const data = await res.json();
+      if (data.success && data.entries) {
+        setEntries(data.entries);
+      }
+    } catch (err) {
+      console.error('Failed to load demo data via API:', err);
+    }
   };
 
-  const handleResetMonth = () => {
+  const handleResetMonth = async () => {
     if (window.confirm('Are you sure you want to clear this month\'s entries?')) {
       triggerHaptic('warning');
       setEntries({});
-      saveToStorage({});
+
+      try {
+        await fetch('/api/entries/reset', { method: 'POST' });
+      } catch (err) {
+        console.error('Failed to reset entries via API:', err);
+      }
     }
   };
 
@@ -218,7 +253,7 @@ export default function App() {
       {/* Bottom Footer Info */}
       <footer className="w-full max-w-2xl mx-auto px-4 mt-10 pt-4 border-t border-[#1a1a1a]/10 flex justify-between items-center font-mono text-[0.55rem] sm:text-xs text-[#1a1a1a]/60 uppercase tracking-widest">
         <span>Telegram Mini App // tinynote</span>
-        <span>Saved Locally</span>
+        <span>Backend API Active</span>
       </footer>
 
 

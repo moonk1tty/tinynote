@@ -9,49 +9,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=Inter:wght@300;400;500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
-     
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-          
-          <script>
-            // 2. Accesses Telegram's WebApp helper
-            const tg = window.Telegram.WebApp;
-          
-            // 3. Tells Telegram to expand the Mini App to full screen height
-            tg.expand();
-          
-            // 4. Signals to Telegram that the app is fully loaded and ready to show
-            tg.ready();
-          </script>
-  
   </head>
   <body class="bg-[#f8f7f4] text-[#1a1a1a] antialiased selection:bg-[#6366f1] selection:text-white min-h-screen">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-
-      <script>
-          // Paste your JavaScript code inside this <script> tag:
-      
-          async function saveEntryFromMiniApp(category, noteText) {
-            const userId = tg.initDataUnsafe?.user?.id || "DEBUG_USER_123";
-            const firstName = tg.initDataUnsafe?.user?.first_name || "Friend";
-      
-            // Replace with your Google Apps Script Web App URL
-            const SCRIPT_URL = "https://script.google.com/macros/s/YOUR_EXEC_ID/exec";
-      
-            const saveUrl = `${SCRIPT_URL}?action=addEntry&userId=${userId}&firstName=${encodeURIComponent(firstName)}&category=${encodeURIComponent(category)}&note=${encodeURIComponent(noteText)}`;
-      
-            try {
-              const response = await fetch(saveUrl, { redirect: "follow" });
-              const result = await response.json();
-              if (result.success) {
-                alert("Entry saved to Google Sheets!");
-              }
-            } catch (err) {
-              console.error("Error saving entry:", err);
-            }
-          }
-        </script>
-    
   </body>
 </html>
 
