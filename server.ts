@@ -22,26 +22,34 @@ app.use((req, res, next) => {
 // Server-side storage configuration (using /tmp to avoid triggering tsx watcher restarts)
 const DATA_FILE = path.join("/tmp", "tinynote_entries.json");
 
+// In-memory fallback for serverless environments (e.g. Vercel)
+let memoryStore: Record<string, Record<number, any>> = {};
+
 function ensureDataFile() {
-  if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ users: {} }), "utf-8");
+  try {
+    if (!fs.existsSync(DATA_FILE)) {
+      fs.writeFileSync(DATA_FILE, JSON.stringify({ users: memoryStore }), "utf-8");
+    }
+  } catch (err) {
+    console.warn("FS non-critical warning (using in-memory store):", err);
   }
 }
 
 function readAllUsersData(): Record<string, Record<number, any>> {
   try {
     ensureDataFile();
-    const raw = fs.readFileSync(DATA_FILE, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && parsed.users) {
-      return parsed.users;
+    if (fs.existsSync(DATA_FILE)) {
+      const raw = fs.readFileSync(DATA_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && parsed.users) {
+        memoryStore = { ...memoryStore, ...parsed.users };
+        return memoryStore;
+      }
     }
-    // Migration fallback for legacy non-user-scoped json
-    return { guest_user: parsed || {} };
   } catch (err) {
-    console.error("Error reading entries data file:", err);
-    return {};
+    console.warn("Error reading entries data file, using memoryStore:", err);
   }
+  return memoryStore;
 }
 
 function getUserIdFromReq(req: express.Request): string {
@@ -73,24 +81,31 @@ function readUserEntries(userId: string): Record<number, any> {
 
 function writeUserEntries(userId: string, entries: Record<number, any>) {
   try {
-    ensureDataFile();
     const allData = readAllUsersData();
     allData[userId] = entries;
-    fs.writeFileSync(DATA_FILE, JSON.stringify({ users: allData }, null, 2), "utf-8");
+    memoryStore[userId] = entries;
+    ensureDataFile();
+    if (fs.existsSync(DATA_FILE) || fs.existsSync("/tmp")) {
+      fs.writeFileSync(DATA_FILE, JSON.stringify({ users: allData }, null, 2), "utf-8");
+    }
   } catch (err) {
-    console.error("Error writing entries data file:", err);
+    console.warn("Error writing entries data file, saved to memoryStore:", err);
   }
 }
 
-// REST API Endpoints
-app.get("/api/entries", (req, res) => {
+// REST API Endpoints (supporting both /api/path and /path for Vercel rewrites)
+app.get(["/api/health", "/health"], (_req, res) => {
+  res.json({ status: "ok", env: process.env.VERCEL ? "vercel" : "node", timestamp: new Date().toISOString() });
+});
+
+app.get(["/api/entries", "/entries"], (req, res) => {
   const userId = getUserIdFromReq(req);
   const entries = readUserEntries(userId);
   res.json({ success: true, userId, count: Object.keys(entries).length, entries });
 });
 
 // Endpoint for formatted array suitable for Google Sheets / CSV
-app.get("/api/entries/list", (req, res) => {
+app.get(["/api/entries/list", "/entries/list"], (req, res) => {
   const userId = getUserIdFromReq(req);
   const entries = readUserEntries(userId);
   const list = Object.values(entries).sort((a, b) => a.dayNumber - b.dayNumber);
@@ -98,7 +113,7 @@ app.get("/api/entries/list", (req, res) => {
 });
 
 // Endpoint to fetch all entries across all users for Google Sheets sync
-app.get("/api/entries/all", (_req, res) => {
+app.get(["/api/entries/all", "/entries/all"], (_req, res) => {
   const allUsersData = readAllUsersData();
   const allEntries: any[] = [];
   
@@ -116,9 +131,9 @@ app.get("/api/entries/all", (_req, res) => {
   res.json({ success: true, count: allEntries.length, entries: allEntries });
 });
 
-app.post("/api/entries", (req, res) => {
+app.post(["/api/entries", "/entries"], (req, res) => {
   const userId = getUserIdFromReq(req);
-  const { dayNumber, text, gradientId, dateString } = req.body;
+  const { dayNumber, text, gradientId, dateString } = req.body || {};
   if (typeof dayNumber !== "number") {
     res.status(400).json({ success: false, error: "Invalid day number" });
     return;
@@ -139,7 +154,7 @@ app.post("/api/entries", (req, res) => {
   res.json({ success: true, userId, entry: newEntry, entries });
 });
 
-app.delete("/api/entries/:dayNumber", (req, res) => {
+app.delete(["/api/entries/:dayNumber", "/entries/:dayNumber"], (req, res) => {
   const userId = getUserIdFromReq(req);
   const dayNumber = parseInt(req.params.dayNumber, 10);
   if (isNaN(dayNumber)) {
@@ -153,15 +168,15 @@ app.delete("/api/entries/:dayNumber", (req, res) => {
   res.json({ success: true, userId, entries });
 });
 
-app.post("/api/entries/reset", (req, res) => {
+app.post(["/api/entries/reset", "/entries/reset"], (req, res) => {
   const userId = getUserIdFromReq(req);
   writeUserEntries(userId, {});
   res.json({ success: true, userId, entries: {} });
 });
 
-app.post("/api/entries/demo", (req, res) => {
+app.post(["/api/entries/demo", "/entries/demo"], (req, res) => {
   const userId = getUserIdFromReq(req);
-  const { entries: demoEntries } = req.body;
+  const { entries: demoEntries } = req.body || {};
   writeUserEntries(userId, demoEntries || {});
   res.json({ success: true, userId, entries: demoEntries || {} });
 });
@@ -172,14 +187,19 @@ app.all("/api/*", (req, res) => {
 });
 
 async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const { createServer: createViteServer } = await import("vite");
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    try {
+      const viteModule = "vite";
+      const { createServer: createViteServer } = await import(/* webpackIgnore: true */ viteModule);
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (err) {
+      console.warn("Vite dev server skipped:", err);
+    }
+  } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (_req, res) => {
