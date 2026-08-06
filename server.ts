@@ -11,7 +11,7 @@ app.use(express.json());
 // Enable CORS for Google Sheets / external tools
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, X-User-Id, X-Telegram-User-Id");
   res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   if (req.method === "OPTIONS") {
     res.sendStatus(200);
@@ -98,6 +98,25 @@ app.get("/api/entries/list", (req, res) => {
   res.json(list);
 });
 
+// Endpoint to fetch all entries across all users for Google Sheets sync
+app.get("/api/entries/all", (_req, res) => {
+  const allUsersData = readAllUsersData();
+  const allEntries: any[] = [];
+  
+  Object.entries(allUsersData).forEach(([userId, userEntries]) => {
+    if (userEntries && typeof userEntries === 'object') {
+      Object.values(userEntries).forEach((item: any) => {
+        allEntries.push({
+          userId,
+          ...item
+        });
+      });
+    }
+  });
+
+  res.json({ success: true, count: allEntries.length, entries: allEntries });
+});
+
 app.post("/api/entries", (req, res) => {
   const userId = getUserIdFromReq(req);
   const { dayNumber, text, gradientId, dateString } = req.body;
@@ -148,6 +167,11 @@ app.post("/api/entries/demo", (req, res) => {
   res.json({ success: true, userId, entries: demoEntries || {} });
 });
 
+// Catch-all 404 JSON handler for API routes to prevent falling back to HTML
+app.all("/api/*", (req, res) => {
+  res.status(404).json({ success: false, error: `Endpoint ${req.path} not found` });
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -168,4 +192,8 @@ async function startServer() {
   });
 }
 
-startServer();
+if (process.env.VERCEL !== "1") {
+  startServer();
+}
+
+export default app;

@@ -56,8 +56,41 @@ export function initTelegramWebApp() {
 }
 
 export function getTelegramUser(): TelegramUser | null {
-  if (typeof window !== 'undefined' && window.Telegram?.WebApp?.initDataUnsafe?.user) {
-    return window.Telegram.WebApp.initDataUnsafe.user;
+  if (typeof window !== 'undefined') {
+    // 1. Try Telegram WebApp SDK context
+    if (window.Telegram?.WebApp?.initDataUnsafe?.user) {
+      const u = window.Telegram.WebApp.initDataUnsafe.user;
+      try {
+        localStorage.setItem('tinynote_tg_user', JSON.stringify(u));
+      } catch (e) {}
+      return u;
+    }
+
+    // 2. Try URL search parameters (e.g. ?userId=8839781890 or ?user_id=8839781890 or ?tgWebAppStartParam=8839781890)
+    const urlParams = new URLSearchParams(window.location.search);
+    const rawUrlUserId = urlParams.get('userId') || urlParams.get('user_id') || urlParams.get('tgWebAppStartParam');
+    if (rawUrlUserId) {
+      const cleanId = rawUrlUserId.replace(/\D/g, ''); // Extract numbers
+      if (cleanId) {
+        const urlUser: TelegramUser = {
+          id: Number(cleanId),
+          first_name: urlParams.get('first_name') || 'Telegram User',
+          username: urlParams.get('username') || undefined,
+        };
+        try {
+          localStorage.setItem('tinynote_tg_user', JSON.stringify(urlUser));
+        } catch (e) {}
+        return urlUser;
+      }
+    }
+
+    // 3. Fallback to cached Telegram user in localStorage
+    try {
+      const savedTg = localStorage.getItem('tinynote_tg_user');
+      if (savedTg) {
+        return JSON.parse(savedTg);
+      }
+    } catch (e) {}
   }
   return null;
 }

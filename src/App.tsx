@@ -108,9 +108,23 @@ export default function App() {
       });
   }, []);
 
-  const getCurrentUserId = () => {
-    if (telegramUser?.id) return `tg_${telegramUser.id}`;
-    return localStorage.getItem('tinynote_client_id') || 'guest_user';
+  const getCurrentUserId = (): string => {
+    const tg = telegramUser || getTelegramUser();
+    if (tg?.id) return `tg_${tg.id}`;
+    
+    // Check if URL search params has userId
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlUser = urlParams.get('userId') || urlParams.get('user_id') || urlParams.get('tgWebAppStartParam');
+    if (urlUser) {
+      const clean = urlUser.replace(/\D/g, '');
+      if (clean) return `tg_${clean}`;
+    }
+
+    return localStorage.getItem('tinynote_client_id') || (() => {
+      const id = 'web_' + Math.random().toString(36).substring(2, 11);
+      localStorage.setItem('tinynote_client_id', id);
+      return id;
+    })();
   };
 
   const saveToLocalCache = (updated: Record<number, GratitudeEntry>) => {
